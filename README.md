@@ -1,33 +1,16 @@
-# ClientOps AI (Demo)
+# Lumen Core
 
-A practical **AI-for-business** demo: RAG chatbot + lead/support triage + CRM-style records + automation + admin dashboard.
+Lumen is an intelligent ClientOps engine that transforms chat-based intent 
+into actionable business workflows.
 
-## What runs today (Day 1 scaffold)
-- FastAPI API service (health + placeholder routes)
-- Streamlit UI service (placeholder pages)
-- Postgres database
-- Redis + RQ worker (background jobs scaffold)
-- Sample SME docs to ingest later
+## The Workflow
+1. **Detect**: Chat interface identifies lead intent.
+2. **Draft**: Worker generates automation drafts (emails, tasks, notifications).
+3. **Approve**: Human-in-the-loop validation via Admin UI.
+4. **Advance**: Auto-advances lead status upon execution.
 
-## Quickstart (Docker)
-1) Copy `.env.example` to `.env` and set values.
-2) Run:
-```bash
-docker compose up --build
-```
-
-### URLs
-- API: http://localhost:8000/docs
-- UI:  http://localhost:8501
-
-## Local dev (without Docker)
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements-dev.txt
-uvicorn apps.api.main:app --reload
-streamlit run apps/ui/app.py
-rq worker -c apps.worker.rq_settings
-```
-
-## Roadmap
-See `docs/PLAN.md`.
+## Tech Stack
+- AI Intent Detection
+- CRM Lead Management
+- Background Worker (Automation Generation)
+- Admin Dashboard
