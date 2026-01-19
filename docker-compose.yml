@@ -1,0 +1,58 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-clientops}
+      POSTGRES_USER: ${POSTGRES_USER:-clientops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-clientops}
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./:/app
+
+  ui:
+    build:
+      context: .
+      dockerfile: apps/ui/Dockerfile
+    env_file:
+      - .env
+    depends_on:
+      - api
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./:/app
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - db
+    volumes:
+      - ./:/app
+
+volumes:
+  db_data:
