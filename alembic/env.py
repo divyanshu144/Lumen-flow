@@ -1,10 +1,14 @@
 from logging.config import fileConfig
-from sqlalchemy import engine_from_config, pool
 from alembic import context
+from sqlalchemy import engine_from_config, pool
 import os
 
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
 from core.db import Base
-from core import models  # noqa: F401  (import models so metadata is populated)
+from core import models  # noqa
 
 config = context.config
 fileConfig(config.config_file_name)
