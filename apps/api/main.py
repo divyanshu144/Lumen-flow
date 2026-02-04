@@ -2,14 +2,13 @@ from fastapi import FastAPI
 from apps.api.routers import health, ingest, chat, crm, conversations
 from core.config import settings
 
-from core.db import Base, engine
+from core.db import engine
 from core import models
-from apps.api.routers import admin 
+from apps.api.routers import admin
 from core.db_wait import wait_for_db
-from apps.api.routers import admin_leads, admin_leads
+from apps.api.routers import admin_leads
 
 wait_for_db(engine)
-Base.metadata.create_all(bind=engine)  # creates tables if missing
 
 app = FastAPI(title=settings.app_name)
 

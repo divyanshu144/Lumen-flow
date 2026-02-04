@@ -1,9 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from datetime import datetime
+from core.models.crm import Lead, Ticket, Conversation, Message
+
 from core.db import get_db
-from core.models.crm import Lead, Ticket, Contact, AutomationDraft, LeadEvent
-from pydantic import BaseModel, Field
+from core.models.crm import Lead, Ticket, Contact, AutomationDraft
+from pydantic import BaseModel
 
 router = APIRouter()
 
@@ -42,47 +45,6 @@ def list_contacts(db: Session = Depends(get_db)):
     return [{"id": c.id, "email": c.email, "name": c.name, "company": c.company} for c in rows]
 
 
-ALLOWED_LEAD_STATUS = {"new", "open", "contacted", "qualified", "won", "lost", "duplicate"}
-
-class LeadUpdateRequest(BaseModel):
-    status: str | None = Field(default=None, description="Lead status")
-    score: int | None = Field(default=None, ge=0, le=100, description="Lead score 0-100")
-
-
-@router.patch("/leads/{lead_id}")
-def update_lead(lead_id: int, req: LeadUpdateRequest, db: Session = Depends(get_db)):
-    lead = db.query(Lead).filter(Lead.id == lead_id).one_or_none()
-    if lead is None:
-        raise HTTPException(status_code=404, detail="Lead not found")
-
-    if req.status is not None:
-        new_status = req.status.strip().lower()
-        if new_status not in ALLOWED_LEAD_STATUS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid status. Allowed: {sorted(ALLOWED_LEAD_STATUS)}",
-            )
-        lead.status = new_status
-
-    if req.score is not None:
-        lead.score = req.score
-
-    db.commit()
-    db.refresh(lead)
-
-    return {
-        "id": lead.id,
-        "contact_id": lead.contact_id,
-        "status": lead.status,
-        "score": lead.score,
-        "summary": lead.summary,
-    }
-
-
-#router = APIRouter()
-
-ALLOWED_LEAD_STATUS = {"new", "open", "contacted", "qualified", "won", "lost", "duplicate"}
-
 AUTO_ADVANCE_ON_APPROVE = {
     "new": "contacted",
     "open": "contacted",  # optional
@@ -92,11 +54,9 @@ class DraftOut(BaseModel):
     id: int
     lead_id: int | None
     kind: str
-    channel: str
-    subject: str | None
-    body: str
     status: str
     created_at: str
+    content: str
 
 @router.get("/leads/{lead_id}/drafts")
 def list_lead_drafts(lead_id: int, db: Session = Depends(get_db)):
@@ -111,11 +71,9 @@ def list_lead_drafts(lead_id: int, db: Session = Depends(get_db)):
             "id": d.id,
             "lead_id": d.lead_id,
             "kind": d.kind,
-            "channel": d.channel,
-            "subject": d.subject,
-            "body": d.body,
             "status": d.status,
             "created_at": d.created_at.isoformat(),
+            "content": d.content,
         }
         for d in drafts
     ]

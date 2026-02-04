@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     app_name: str = "clientops-ai"
 
     database_url: str
-    redis_url: str = "redis://localhost:6379/0"
+    redis_url: str = "redis://redis:6379/0"
 
     llm_provider: str = "openai"
     openai_api_key: str | None = None

@@ -1,15 +1,35 @@
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
-from datetime import datetime
 
 from core.db import SessionLocal
 from core.models.crm import Lead, Ticket, AutomationDraft, Conversation, Message
+from core.llm.client import generate_llm_draft
+
+DRAFT_DEDUP_WINDOW_MIN = 10
+
+def _recent_pending_draft_exists(db: Session, *, kind: str, lead_id: int | None = None, ticket_id: int | None = None) -> bool:
+    since = datetime.utcnow() - timedelta(minutes=DRAFT_DEDUP_WINDOW_MIN)
+    q = db.query(AutomationDraft).filter(
+        AutomationDraft.kind == kind,
+        AutomationDraft.status == "pending",
+        AutomationDraft.created_at >= since,   # relies on server_default func.now()
+    )
+    if lead_id is not None:
+        q = q.filter(AutomationDraft.lead_id == lead_id)
+    if ticket_id is not None:
+        q = q.filter(AutomationDraft.ticket_id == ticket_id)
+    return db.query(q.exists()).scalar()
+
 
 def create_lead_followup_draft(lead_id: int):
-    db: Session = SessionLocal()
-    try:
-        lead = db.query(Lead).filter(Lead.id == lead_id).one()
+    with SessionLocal() as db:
+        lead = db.query(Lead).filter(Lead.id == lead_id).one_or_none()
+        if lead is None:
+            return {"ok": False, "error": "Lead not found", "lead_id": lead_id}
 
-        # try to find a conversation for the same contact (optional)
+        if _recent_pending_draft_exists(db, kind="lead_followup", lead_id=lead.id):
+            return {"ok": True, "skipped": True, "reason": "recent pending draft exists"}
+
         convo = (
             db.query(Conversation)
             .filter(Conversation.contact_id == lead.contact_id)
@@ -17,12 +37,7 @@ def create_lead_followup_draft(lead_id: int):
             .first()
         )
 
-        content = (
-            "Hi there,\n\n"
-            f"Thanks for reaching out about: “{lead.summary}”.\n"
-            "Could you share your timeline and budget range? If helpful, we can book a quick 15-min call.\n\n"
-            "Best,\nClientOps AI"
-        )
+        content = generate_llm_draft(lead_summary=lead.summary, context_docs=None)
 
         draft = AutomationDraft(
             kind="lead_followup",
@@ -34,8 +49,8 @@ def create_lead_followup_draft(lead_id: int):
             content=content,
         )
         db.add(draft)
+        db.flush()  # ensures draft.id exists now
 
-        # (optional) also store a system message so it shows in your Conversation Viewer immediately
         if convo:
             db.add(
                 Message(
@@ -46,15 +61,17 @@ def create_lead_followup_draft(lead_id: int):
             )
 
         db.commit()
-        return {"draft_id": draft.id}
-    finally:
-        db.close()
+        return {"ok": True, "draft_id": draft.id}
 
 
 def create_ticket_reply_draft(ticket_id: int):
-    db: Session = SessionLocal()
-    try:
-        ticket = db.query(Ticket).filter(Ticket.id == ticket_id).one()
+    with SessionLocal() as db:
+        ticket = db.query(Ticket).filter(Ticket.id == ticket_id).one_or_none()
+        if ticket is None:
+            return {"ok": False, "error": "Ticket not found", "ticket_id": ticket_id}
+
+        if _recent_pending_draft_exists(db, kind="ticket_reply", ticket_id=ticket.id):
+            return {"ok": True, "skipped": True, "reason": "recent pending draft exists"}
 
         convo = (
             db.query(Conversation)
@@ -80,6 +97,7 @@ def create_ticket_reply_draft(ticket_id: int):
             content=content,
         )
         db.add(draft)
+        db.flush()
 
         if convo:
             db.add(
@@ -91,6 +109,4 @@ def create_ticket_reply_draft(ticket_id: int):
             )
 
         db.commit()
-        return {"draft_id": draft.id}
-    finally:
-        db.close()
+        return {"ok": True, "draft_id": draft.id}
