@@ -8,6 +8,7 @@ from core.db import get_db
 from core.queue import get_queue
 from core.models.crm import Conversation, Message, Contact, Lead, Ticket
 from apps.api.utils.replies import build_reply
+from core.llm.client import generate_llm_reply
 
 router = APIRouter()
 
@@ -99,8 +100,8 @@ def chat(req: ChatRequest, db: Session = Depends(get_db)):
             get_queue().enqueue("apps.worker.jobs.create_ticket_reply_draft", ticket.id)
 
 
-    # 5) assistant response (placeholder for now)
-    answer = build_reply(req.message)
+    # 5) assistant response (LLM with fallback)
+    answer = generate_llm_reply(req.message) or build_reply(req.message)
     assistant_msg = Message(
         conversation_id=convo.id,
         role="assistant",
@@ -116,5 +117,4 @@ def chat(req: ChatRequest, db: Session = Depends(get_db)):
         "triage": {"intent": intent, "confidence": 0.6 if intent != "general" else 0.3},
         "contact_id": contact_id,
     }
-
 

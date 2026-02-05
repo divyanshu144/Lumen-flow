@@ -111,6 +111,19 @@ def upgrade():
     op.create_index("ix_automation_drafts_session_id", "automation_drafts", ["session_id"])
 
     op.create_table(
+        "lead_score_rules",
+        sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+        sa.Column("name", sa.String(length=100), nullable=False),
+        sa.Column("field", sa.String(length=50), nullable=False),
+        sa.Column("operator", sa.String(length=20), nullable=False),
+        sa.Column("value", sa.String(length=255), nullable=False),
+        sa.Column("points", sa.Integer, nullable=False),
+        sa.Column("active", sa.Boolean, nullable=False, server_default=sa.text("true")),
+        sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.text("now()")),
+    )
+    op.create_index("ix_lead_score_rules_active", "lead_score_rules", ["active"])
+
+    op.create_table(
         "action_logs",
         sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
         sa.Column("lead_id", sa.Integer, sa.ForeignKey("leads.id"), nullable=True),
@@ -133,6 +146,9 @@ def downgrade():
     op.drop_index("ix_automation_drafts_ticket_id", table_name="automation_drafts")
     op.drop_index("ix_automation_drafts_lead_id", table_name="automation_drafts")
     op.drop_table("automation_drafts")
+
+    op.drop_index("ix_lead_score_rules_active", table_name="lead_score_rules")
+    op.drop_table("lead_score_rules")
 
     op.drop_index("ix_lead_events_lead_id", table_name="lead_events")
     op.drop_table("lead_events")

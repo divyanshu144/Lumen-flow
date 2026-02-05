@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, Column
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, Column, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -135,3 +135,16 @@ class AutomationDraft(Base):
     ticket = relationship("Ticket", backref="drafts", lazy="joined")
     contact = relationship("Contact", lazy="joined")
     conversation = relationship("Conversation", lazy="joined")
+
+
+class LeadScoreRule(Base):
+    __tablename__ = "lead_score_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100))
+    field: Mapped[str] = mapped_column(String(50))  # summary | status
+    operator: Mapped[str] = mapped_column(String(20))  # contains | equals
+    value: Mapped[str] = mapped_column(String(255))
+    points: Mapped[int] = mapped_column(Integer)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

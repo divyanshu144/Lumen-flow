@@ -11,5 +11,6 @@ class Settings(BaseSettings):
 
     llm_provider: str = "openai"
     openai_api_key: str | None = None
+    llm_model: str = "gpt-4o-mini"
 
 settings = Settings()

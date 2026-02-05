@@ -152,6 +152,10 @@ def compose_message_from_form(payload: dict) -> str:
     return ". ".join(bits) if bits else "Looking for help with CRM and automation."
 
 
+PAGES = ["Overview", "Chat", "Admin"]
+query_page = st.query_params.get("page", [None])[0]
+default_index = PAGES.index(query_page) if query_page in PAGES else 0
+
 # ---- sidebar navigation ----
 with st.sidebar:
     st.markdown("<div class='sidebar-title'>Lumen Core</div>", unsafe_allow_html=True)
@@ -159,7 +163,7 @@ with st.sidebar:
         "<div class='sidebar-sub'>ClientOps engine for lead intent, drafts, and approvals.</div>",
         unsafe_allow_html=True,
     )
-    page = st.radio("Navigate", ["Overview", "Chat", "Admin"], index=0)
+    page = st.radio("Navigate", PAGES, index=default_index)
     st.divider()
     st.caption("Environment")
     st.code(API_URL, language="text")
@@ -181,64 +185,138 @@ df_tickets = to_df(tickets)
 
 
 if page == "Overview":
-    st.markdown(
-        """
-        <div class="hero">
-            <div class="pill">Live demo</div>
-            <h1 class="hero-title">ClientOps AI, made to feel human.</h1>
-            <p class="hero-sub">Detect lead intent, draft follow-ups, and keep a human in the loop in one clear flow.</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    left, right = st.columns([3, 2])
+    with left:
+        st.markdown(
+            """
+            <div class="hero">
+                <div class="pill">ClientOps OS</div>
+                <h1 class="hero-title">Turn chat intent into revenue-ready workflows.</h1>
+                <p class="hero-sub">Lumen detects lead intent, drafts follow-ups, and keeps humans in the loop before anything is sent.</p>
+                <div class="cta-row">
+                    <a class="cta-primary" href="?page=Chat">Try live demo</a>
+                    <a class="cta-secondary" href="#metrics">See metrics</a>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
+        st.markdown("<a id='how-it-works'></a>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>How it works</div>", unsafe_allow_html=True)
+        h1, h2, h3 = st.columns(3)
+        with h1:
+            st.markdown(
+                "<div class='card'><div class='card-title'>Detect</div>"
+                "<div class='card-muted'>Classify intent and route to the right workflow instantly.</div></div>",
+                unsafe_allow_html=True,
+            )
+        with h2:
+            st.markdown(
+                "<div class='card'><div class='card-title'>Draft</div>"
+                "<div class='card-muted'>Generate high-quality follow-ups and suggested actions.</div></div>",
+                unsafe_allow_html=True,
+            )
+        with h3:
+            st.markdown(
+                "<div class='card'><div class='card-title'>Approve</div>"
+                "<div class='card-muted'>Human-in-the-loop review before sending or advancing.</div></div>",
+                unsafe_allow_html=True,
+            )
+
+    with right:
+        st.markdown(
+            """
+            <div class="product-preview">
+                <div class="card-title">Product Preview</div>
+                <div class="preview-step">
+                    <span class="preview-dot"></span>
+                    Lead detected from chat message
+                </div>
+                <div class="preview-step">
+                    <span class="preview-dot amber"></span>
+                    Draft created and queued for review
+                </div>
+                <div class="preview-step">
+                    <span class="preview-dot green"></span>
+                    Approve + send follow-up
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<a id='metrics'></a>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Metrics</div>", unsafe_allow_html=True)
+
+    metrics = safe_get_json(f"{API_URL}/admin/metrics") or {}
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.markdown(
             "<div class='card'><div class='card-title'>Contacts</div><div class='card-muted'>Total records</div></div>",
             unsafe_allow_html=True,
         )
-        st.metric("", int(df_contacts.shape[0]))
+        st.metric("", metrics.get("contacts", int(df_contacts.shape[0])))
     with c2:
         st.markdown(
             "<div class='card'><div class='card-title'>Leads</div><div class='card-muted'>Active pipeline</div></div>",
             unsafe_allow_html=True,
         )
-        st.metric("", int(df_leads.shape[0]))
+        st.metric("", metrics.get("leads", int(df_leads.shape[0])))
     with c3:
         st.markdown(
             "<div class='card'><div class='card-title'>Tickets</div><div class='card-muted'>Support queue</div></div>",
             unsafe_allow_html=True,
         )
-        st.metric("", int(df_tickets.shape[0]))
+        st.metric("", metrics.get("tickets", int(df_tickets.shape[0])))
     with c4:
-        pending_drafts = safe_get_json(f"{API_URL}/admin/drafts?status=pending") or []
         st.markdown(
             "<div class='card'><div class='card-title'>Drafts</div><div class='card-muted'>Pending approvals</div></div>",
             unsafe_allow_html=True,
         )
-        st.metric("", len(pending_drafts))
+        st.metric("", metrics.get("drafts_pending", 0))
 
-    st.markdown("<div class='section-title'>What you can do</div>", unsafe_allow_html=True)
-    col_a, col_b, col_c = st.columns(3)
-    with col_a:
+    c5, c6, c7 = st.columns(3)
+    with c5:
         st.markdown(
-            "<div class='card'><div class='card-title'>Chat to Intent</div>"
-            "<div class='card-muted'>Turn a message into lead or support intent with instant replies.</div></div>",
+            "<div class='card'><div class='card-title'>Conversations</div><div class='card-muted'>Active sessions</div></div>",
             unsafe_allow_html=True,
         )
-    with col_b:
+        st.metric("", metrics.get("conversations", 0))
+    with c6:
         st.markdown(
-            "<div class='card'><div class='card-title'>Drafts + Approval</div>"
-            "<div class='card-muted'>Generate follow-up drafts and approve in one click.</div></div>",
+            "<div class='card'><div class='card-title'>Messages</div><div class='card-muted'>Total logs</div></div>",
             unsafe_allow_html=True,
         )
-    with col_c:
+        st.metric("", metrics.get("messages", 0))
+    with c7:
         st.markdown(
-            "<div class='card'><div class='card-title'>CRM View</div>"
-            "<div class='card-muted'>Unified view of contacts, leads, tickets, and notes.</div></div>",
+            "<div class='card'><div class='card-title'>Avg response</div><div class='card-muted'>Seconds</div></div>",
             unsafe_allow_html=True,
         )
+        avg_sec = metrics.get("avg_response_sec")
+        st.metric("", f"{avg_sec:.1f}s" if isinstance(avg_sec, (int, float)) else "—")
+
+    st.markdown("<div class='section-title'>Intent distribution</div>", unsafe_allow_html=True)
+    intent = safe_get_json(f"{API_URL}/admin/intent") or {"lead": 0, "ticket": 0, "general": 0}
+    intent_df = pd.DataFrame(
+        [
+            {"intent": "lead", "count": intent.get("lead", 0)},
+            {"intent": "ticket", "count": intent.get("ticket", 0)},
+            {"intent": "general", "count": intent.get("general", 0)},
+        ]
+    )
+    st.bar_chart(intent_df, x="intent", y="count", height=220)
+
+    s1, s2 = st.columns([1, 3])
+    with s1:
+        if st.button("Seed demo data"):
+            res = safe_post_json(f"{API_URL}/admin/seed-demo", {})
+            if res is not None:
+                st.success("Demo data seeded.")
+                st.rerun()
+    with s2:
+        st.caption("Use demo data to populate metrics and showcase the flow.")
 
     st.markdown("<div class='section-title'>Proof in the outcomes</div>", unsafe_allow_html=True)
     p1, p2, p3 = st.columns(3)
@@ -260,6 +338,10 @@ if page == "Overview":
             "<div class='card-muted'>Cut ticket backlog by 38% with intent detection and instant follow-ups.</div></div>",
             unsafe_allow_html=True,
         )
+
+    st.markdown("<a id='demo'></a>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Try the demo</div>", unsafe_allow_html=True)
+    st.info("Jump to the Chat page to run the live demo.")
 
 
 if page == "Chat":
@@ -609,6 +691,8 @@ if page == "Admin":
                 hide_index=True,
             )
 
+            st.markdown("#### Edit + Approve")
+
             dcol1, dcol2 = st.columns([2, 2])
             with dcol1:
                 approve_id = st.number_input("Draft ID to approve", min_value=1, value=int(df_drafts["id"].iloc[0]))
@@ -622,3 +706,30 @@ if page == "Admin":
                         st.rerun()
                     except Exception as e:
                         st.error(f"Approve failed: {e}")
+
+            draft_row = df_drafts[df_drafts["id"] == int(approve_id)]
+            if not draft_row.empty:
+                draft_content = draft_row.iloc[0]["content"]
+            else:
+                draft_content = ""
+
+            edited = st.text_area("Edit draft content", value=str(draft_content), height=160)
+            c1, c2 = st.columns([2, 2])
+            with c1:
+                if st.button("Save Edit"):
+                    res = safe_patch_json(
+                        f"{API_URL}/admin/drafts/{int(approve_id)}",
+                        {"content": edited},
+                    )
+                    if res is not None:
+                        st.success("Draft updated.")
+                        st.rerun()
+            with c2:
+                if st.button("Reject Draft"):
+                    try:
+                        r = httpx.post(f"{API_URL}/admin/drafts/{int(approve_id)}/reject", timeout=30)
+                        r.raise_for_status()
+                        st.success("Draft rejected.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Reject failed: {e}")
