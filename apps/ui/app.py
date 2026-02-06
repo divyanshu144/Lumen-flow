@@ -21,6 +21,17 @@ def load_css():
 
 load_css()
 
+def _maybe_restore_token_from_query():
+    if st.session_state.get("auth_token"):
+        return
+    token = st.query_params.get("token")
+    if isinstance(token, list):
+        token = token[0] if token else None
+    if token:
+        st.session_state["auth_token"] = token
+
+
+_maybe_restore_token_from_query()
 
 try:
     from apps.api.data.service_catalog import SERVICE_CATALOG
@@ -56,7 +67,7 @@ except Exception:
 
 def safe_get_json(url: str):
     try:
-        r = httpx.get(url, timeout=30)
+        r = httpx.get(url, timeout=30, headers=_auth_headers())
         r.raise_for_status()
         return r.json()
     except Exception as e:
@@ -66,7 +77,7 @@ def safe_get_json(url: str):
 
 def safe_post_json(url: str, payload: dict):
     try:
-        r = httpx.post(url, json=payload, timeout=30)
+        r = httpx.post(url, json=payload, timeout=30, headers=_auth_headers())
         r.raise_for_status()
         return r.json()
     except Exception as e:
@@ -76,12 +87,29 @@ def safe_post_json(url: str, payload: dict):
 
 def safe_patch_json(url: str, payload: dict):
     try:
-        r = httpx.patch(url, json=payload, timeout=30)
+        r = httpx.patch(url, json=payload, timeout=30, headers=_auth_headers())
         r.raise_for_status()
         return r.json()
     except Exception as e:
         st.error(f"API error calling {url}: {e}")
         return None
+
+
+def safe_delete(url: str):
+    try:
+        r = httpx.delete(url, timeout=30, headers=_auth_headers())
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        st.error(f"API error calling {url}: {e}")
+        return None
+
+
+def _auth_headers() -> dict:
+    token = st.session_state.get("auth_token")
+    if token:
+        return {"Authorization": f"Bearer {token}"}
+    return {}
 
 
 def detect_topic(text: str) -> dict | None:
@@ -102,8 +130,8 @@ def build_routing(intent: str | None) -> str:
 
 def build_followup_preview(intent: str | None, topic: dict | None, payload: dict) -> tuple[str, str]:
     name = payload.get("name") or "there"
-    crm = payload.get("crm") or "your CRM"
-    goal = payload.get("goal") or "your workflow"
+    crm = _normalize_crm(payload.get("crm"))
+    goal = _summarize_goal(payload.get("goal"))
     timeline = payload.get("timeline") or "soon"
 
     if intent == "ticket":
@@ -152,6 +180,27 @@ def compose_message_from_form(payload: dict) -> str:
     return ". ".join(bits) if bits else "Looking for help with CRM and automation."
 
 
+def _normalize_crm(crm_text: str | None) -> str:
+    text = (crm_text or "").strip()
+    if not text:
+        return "your CRM system"
+    lowered = text.lower()
+    if any(x in lowered for x in ["no crm", "not using", "none", "na", "n/a"]):
+        return "a new CRM setup (no existing CRM)"
+    return text
+
+
+def _summarize_goal(goal: str | None) -> str:
+    text = (goal or "").strip()
+    if not text:
+        return "your workflow"
+    # Basic cleanup and shortening for preview
+    cleaned = " ".join(text.split())
+    if len(cleaned) > 120:
+        cleaned = cleaned[:117].rsplit(" ", 1)[0] + "..."
+    return cleaned
+
+
 PAGES = ["Overview", "Chat", "Admin"]
 query_page = st.query_params.get("page", [None])[0]
 default_index = PAGES.index(query_page) if query_page in PAGES else 0
@@ -163,10 +212,60 @@ with st.sidebar:
         "<div class='sidebar-sub'>ClientOps engine for lead intent, drafts, and approvals.</div>",
         unsafe_allow_html=True,
     )
+    st.markdown("**Auth**")
+    if not st.session_state.get("auth_token"):
+        auth_tab = st.tabs(["Login", "Register"])
+        with auth_tab[0]:
+            login_email = st.text_input("Email", key="login_email")
+            login_password = st.text_input("Password", type="password", key="login_password")
+            if st.button("Login"):
+                try:
+                    r = httpx.post(
+                        f"{API_URL}/auth/login",
+                        json={"email": login_email, "password": login_password},
+                        timeout=30,
+                    )
+                    r.raise_for_status()
+                    token = r.json().get("access_token")
+                    st.session_state["auth_token"] = token
+                    if token:
+                        st.query_params["token"] = token
+                    st.success("Logged in.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Login failed: {e}")
+        with auth_tab[1]:
+            reg_email = st.text_input("Email", key="reg_email")
+            reg_password = st.text_input("Password", type="password", key="reg_password")
+            reg_tenant = st.text_input("Tenant name", key="reg_tenant")
+            if st.button("Register"):
+                try:
+                    r = httpx.post(
+                        f"{API_URL}/auth/register",
+                        json={"email": reg_email, "password": reg_password, "tenant_name": reg_tenant},
+                        timeout=30,
+                    )
+                    r.raise_for_status()
+                    token = r.json().get("access_token")
+                    st.session_state["auth_token"] = token
+                    if token:
+                        st.query_params["token"] = token
+                    st.success("Account created.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Register failed: {e}")
+    else:
+        st.success("Authenticated")
+        if st.button("Logout"):
+            st.session_state.pop("auth_token", None)
+            try:
+                st.query_params.clear()
+            except Exception:
+                pass
+            st.rerun()
     page = st.radio("Navigate", PAGES, index=default_index)
     st.divider()
     st.caption("Environment")
-    st.code(API_URL, language="text")
 
 
 # ---- load shared data ----
@@ -354,13 +453,17 @@ if page == "Chat":
         st.markdown("<div class='card-title'>Lead Capture</div>", unsafe_allow_html=True)
 
         with st.form("lead_capture"):
-            lead_name = st.text_input("Name", "")
-            lead_email = st.text_input("Work email", "")
-            lead_company = st.text_input("Company", "")
-            lead_crm = st.text_input("CRM used", "")
-            lead_goal = st.text_area("What do you want to achieve?", "", height=100)
+            lead_name = st.text_input("Full name", placeholder="Aarav Kapoor")
+            lead_email = st.text_input("Work email", placeholder="aarav@company.com")
+            lead_company = st.text_input("Company", placeholder="Acme Logistics")
+            lead_crm = st.text_input("CRM (if any)", placeholder="HubSpot / Salesforce / None")
+            lead_goal = st.text_area(
+                "Primary goal",
+                placeholder="Example: Route WhatsApp leads into the CRM and auto-assign reps within minutes.",
+                height=100,
+            )
             lead_timeline = st.selectbox(
-                "Timeline",
+                "Target timeline",
                 ["This week", "This month", "This quarter", "Exploring"],
                 index=1,
             )
@@ -379,6 +482,11 @@ if page == "Chat":
             payload = {
                 "message": message,
                 "session_id": "demo-session",
+                "source": "lead_capture",
+                "name": lead_payload["name"],
+                "company": lead_payload["company"],
+                "crm": lead_payload["crm"],
+                "goal": lead_payload["goal"],
             }
             if lead_payload["email"]:
                 payload["email"] = lead_payload["email"]
@@ -436,6 +544,9 @@ if page == "Chat":
         if topic:
             st.write(f"**{topic.get('name')}**")
             st.caption(topic.get("description"))
+        elif intent == "lead":
+            st.write("**CRM + Data Setup**")
+            st.caption("CRM implementation + data model, pipelines, integrations, dashboards.")
         else:
             st.info("Send a message so we can recommend the best service.")
         st.markdown("</div>", unsafe_allow_html=True)
@@ -453,33 +564,38 @@ if page == "Chat":
         st.session_state["quick_chat"] = []
 
     with st.expander("Quick chat", expanded=False):
-        qc_msg = st.text_input("Message", "", key="qc_msg")
-        qc_email = st.text_input("Email", "", key="qc_email")
-        if st.button("Send", key="qc_send"):
-            payload = {"message": qc_msg, "session_id": "demo-session"}
+        st.caption("AI helper for first-contact questions.")
+        qc_email = ""
+
+        chat_box = st.container(height=240)
+        with chat_box:
+            for msg in st.session_state.get("quick_chat", []):
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+
+        user_input = st.chat_input("Ask what we do, pricing, or how we can help...")
+        if user_input:
+            st.session_state["quick_chat"].append({"role": "user", "content": user_input})
+
+            helper_context = (
+                "Context: You are an assistant for Lumen Core. "
+                "Services: CRM setup, integrations, automation, and support. "
+                "Answer briefly and ask one clarifying question."
+            )
+            payload = {
+                "message": f"{helper_context}\nUser question: {user_input}",
+                "session_id": "helper-session",
+                "source": "helper",
+            }
             if qc_email.strip():
                 payload["email"] = qc_email.strip()
+
             reply = safe_post_json(f"{API_URL}/chat", payload)
             if reply is not None:
                 st.session_state["chat_reply"] = reply
-                st.session_state["lead_payload"] = {"name": "", "email": qc_email.strip(), "goal": qc_msg}
-                st.session_state["quick_chat"].append(
-                    {"role": "user", "content": qc_msg}
-                )
+                st.session_state["lead_payload"] = {"name": "", "email": qc_email.strip(), "goal": user_input}
                 st.session_state["quick_chat"].append(
                     {"role": "assistant", "content": reply.get("answer", "")}
-                )
-
-        history = st.session_state.get("quick_chat", [])[-6:]
-        if history:
-            st.divider()
-            for m in history:
-                role = m.get("role", "assistant")
-                content = m.get("content", "")
-                bubble_class = "chat-user" if role == "user" else "chat-assistant"
-                st.markdown(
-                    f'<div class="chat-bubble {bubble_class}">{content}</div>',
-                    unsafe_allow_html=True,
                 )
 
 
@@ -487,7 +603,7 @@ if page == "Admin":
     st.markdown("<div class='section-title'>Admin Workspace</div>", unsafe_allow_html=True)
     st.caption("Internal CRM view with lead updates, notes, and draft approvals.")
 
-    admin_tabs = st.tabs(["Contacts", "Leads", "Tickets", "Conversation", "Drafts"])
+    admin_tabs = st.tabs(["Contacts", "Leads", "Pipeline", "Scoring", "SLA", "Tickets", "Conversation", "Drafts"])
 
     with admin_tabs[0]:
         st.markdown("<div class='card'>", unsafe_allow_html=True)
@@ -609,6 +725,92 @@ if page == "Admin":
                 st.info("No timeline loaded yet. Click **Load timeline**.")
 
     with admin_tabs[2]:
+        st.markdown("<div class='section-title'>Pipeline</div>", unsafe_allow_html=True)
+        statuses = ["new", "contacted", "qualified", "won", "lost"]
+        cols = st.columns(len(statuses))
+        for i, status in enumerate(statuses):
+            with cols[i]:
+                st.markdown(f"<div class='card-title'>{status.title()}</div>", unsafe_allow_html=True)
+                bucket = df_leads[df_leads["status"] == status] if "status" in df_leads.columns else pd.DataFrame()
+                if bucket.empty:
+                    st.caption("No leads")
+                else:
+                    for _, row in bucket.iterrows():
+                        st.markdown(
+                            f"<div class='card-ghost'><div class='card-title'>Lead #{row['id']}</div>"
+                            f"<div class='card-muted'>{row.get('summary','')}</div></div>",
+                            unsafe_allow_html=True,
+                        )
+
+    with admin_tabs[3]:
+        st.markdown("<div class='section-title'>Lead Scoring Rules</div>", unsafe_allow_html=True)
+        rules = safe_get_json(f"{API_URL}/admin/score/rules") or []
+        df_rules = pd.DataFrame(rules)
+        if df_rules.empty:
+            st.info("No rules yet. Add one to start scoring leads.")
+        else:
+            st.dataframe(df_rules, use_container_width=True, hide_index=True)
+
+        st.markdown("#### Add rule")
+        r1, r2, r3 = st.columns(3)
+        with r1:
+            rule_name = st.text_input("Name", value="High intent keyword")
+            rule_field = st.selectbox("Field", ["summary", "status"])
+        with r2:
+            rule_operator = st.selectbox("Operator", ["contains", "equals"])
+            rule_value = st.text_input("Value", value="pricing")
+        with r3:
+            rule_points = st.number_input("Points", min_value=0, max_value=100, value=15)
+            rule_active = st.checkbox("Active", value=True)
+
+        if st.button("Create rule"):
+            payload = {
+                "name": rule_name,
+                "field": rule_field,
+                "operator": rule_operator,
+                "value": rule_value,
+                "points": int(rule_points),
+                "active": rule_active,
+            }
+            res = safe_post_json(f"{API_URL}/admin/score/rules", payload)
+            if res is not None:
+                st.success("Rule created.")
+                st.rerun()
+
+        if not df_rules.empty:
+            st.markdown("#### Manage rule")
+            rule_id = st.number_input("Rule ID", min_value=1, value=int(df_rules.iloc[0]["id"]))
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("Disable rule"):
+                    res = safe_patch_json(f"{API_URL}/admin/score/rules/{int(rule_id)}", {"active": False})
+                    if res is not None:
+                        st.success("Rule disabled.")
+                        st.rerun()
+            with c2:
+                if st.button("Delete rule"):
+                    res = safe_delete(f"{API_URL}/admin/score/rules/{int(rule_id)}")
+                    if res is not None:
+                        st.success("Rule deleted.")
+                        st.rerun()
+
+        st.markdown("#### Recompute scores")
+        if st.button("Recompute all lead scores"):
+            res = safe_post_json(f"{API_URL}/admin/score/recompute", {})
+            if res is not None:
+                st.success(f"Scores updated: {res.get('updated', 0)} leads.")
+
+    with admin_tabs[4]:
+        st.markdown("<div class='section-title'>SLA Tracking</div>", unsafe_allow_html=True)
+        threshold = st.slider("SLA threshold (seconds)", min_value=60, max_value=1200, value=300, step=30)
+        sla = safe_get_json(f"{API_URL}/admin/sla?threshold_sec={threshold}") or []
+        df_sla = pd.DataFrame(sla)
+        if df_sla.empty:
+            st.info("No SLA data yet.")
+        else:
+            st.dataframe(df_sla, use_container_width=True, hide_index=True)
+
+    with admin_tabs[5]:
         if df_tickets.empty:
             st.info("No tickets yet.")
         else:
@@ -639,11 +841,35 @@ if page == "Admin":
                 except Exception:
                     st.warning("contact_id filter must be an integer.")
 
-            preferred_cols = [c for c in ["id", "contact_id", "status", "priority", "category", "summary"] if c in filtered_t.columns]
+            preferred_cols = [
+                c
+                for c in ["id", "contact_id", "status", "priority", "category", "tag", "sentiment", "urgency", "summary"]
+                if c in filtered_t.columns
+            ]
             other_cols = [c for c in filtered_t.columns if c not in preferred_cols]
             st.dataframe(filtered_t[preferred_cols + other_cols], use_container_width=True, hide_index=True)
 
-    with admin_tabs[3]:
+            st.divider()
+            st.markdown("#### Suggested replies")
+            ticket_id = st.number_input(
+                "Ticket ID",
+                min_value=1,
+                value=int(filtered_t["id"].iloc[0]) if "id" in filtered_t.columns and len(filtered_t) else 1,
+            )
+            if st.button("Get suggestions"):
+                macros = safe_get_json(f"{API_URL}/admin/tickets/{int(ticket_id)}/macros")
+                if macros is not None:
+                    st.caption(f"Tag: {macros.get('tag')}")
+                    for idx, reply in enumerate(macros.get("macros", []), start=1):
+                        st.code(f"{idx}. {reply}", language="text")
+
+            if st.button("Reclassify ticket"):
+                res = safe_post_json(f"{API_URL}/admin/tickets/{int(ticket_id)}/classify", {})
+                if res is not None:
+                    st.success("Ticket reclassified.")
+                    st.json(res)
+
+    with admin_tabs[6]:
         session_id = st.text_input("Session ID", value="demo-session")
         convo = safe_get_json(f"{API_URL}/conversations/{session_id}")
         if convo is None:
@@ -676,7 +902,7 @@ if page == "Admin":
             else:
                 st.info("No automation drafts yet for this session.")
 
-    with admin_tabs[4]:
+    with admin_tabs[7]:
         drafts = safe_get_json(f"{API_URL}/admin/drafts?status=pending")
         if drafts is None:
             st.stop()

@@ -7,10 +7,32 @@ from sqlalchemy.sql import func
 from core.db import Base
 
 
+class Tenant(Base):
+    __tablename__ = "tenants"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(150))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), index=True)
+    email: Mapped[str] = mapped_column(String(255), index=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(50), default="agent")  # admin | agent
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    tenant: Mapped["Tenant"] = relationship()
+
+
 class Contact(Base):
     __tablename__ = "contacts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), index=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     company: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -23,9 +45,10 @@ class Conversation(Base):
     __tablename__ = "conversations"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), index=True)
 
     # session key for web chat; later can be user_id/contact_id
-    session_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    session_id: Mapped[str] = mapped_column(String(100), index=True)
 
     contact_id: Mapped[int | None] = mapped_column(ForeignKey("contacts.id"), nullable=True)
     channel: Mapped[str] = mapped_column(String(50), default="web")
@@ -39,6 +62,7 @@ class Message(Base):
     __tablename__ = "messages"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), index=True)
     conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id"), index=True)
 
     role: Mapped[str] = mapped_column(String(20))  # user/assistant/system
@@ -53,6 +77,7 @@ class Lead(Base):
     __tablename__ = "leads"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), index=True)
     contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id"), index=True)
 
     status: Mapped[str] = mapped_column(String(30), default="new")  # new/contacted/won/lost
@@ -73,11 +98,15 @@ class Ticket(Base):
     __tablename__ = "tickets"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), index=True)
     contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id"), index=True)
 
     priority: Mapped[str] = mapped_column(String(20), default="medium")  # low/medium/high
     status: Mapped[str] = mapped_column(String(30), default="open")  # open/in_progress/closed
     category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    tag: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    sentiment: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    urgency: Mapped[str | None] = mapped_column(String(20), nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -87,6 +116,7 @@ class LeadEvent(Base):
     __tablename__ = "lead_events"
 
     id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
     lead_id = Column(Integer, ForeignKey("leads.id"), nullable=False, index=True)
 
     # event types: status_changed, score_changed, note_added, system_draft, etc.
@@ -115,6 +145,7 @@ class AutomationDraft(Base):
     # what kind of draft is this?
     kind = Column(String(50), nullable=False)  # "lead_followup" | "ticket_reply"
 
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
     # link to entity
     lead_id = Column(Integer, ForeignKey("leads.id"), nullable=True, index=True)
     ticket_id = Column(Integer, ForeignKey("tickets.id"), nullable=True, index=True)
@@ -141,6 +172,7 @@ class LeadScoreRule(Base):
     __tablename__ = "lead_score_rules"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), index=True)
     name: Mapped[str] = mapped_column(String(100))
     field: Mapped[str] = mapped_column(String(50))  # summary | status
     operator: Mapped[str] = mapped_column(String(20))  # contains | equals

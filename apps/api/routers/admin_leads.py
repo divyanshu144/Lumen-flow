@@ -3,6 +3,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from core.db import get_db
+from apps.api.routers.auth import get_current_user
+from core.models.crm import User
 from core.models.crm import Lead, LeadEvent
 
 router = APIRouter(prefix="/admin/leads", tags=["admin-leads"])
@@ -19,8 +21,12 @@ class LeadNoteRequest(BaseModel):
 
 
 @router.patch("/{lead_id}")
-def update_lead(lead_id: int, req: LeadUpdateRequest, db: Session = Depends(get_db)):
-    lead = db.query(Lead).filter(Lead.id == lead_id).one_or_none()
+def update_lead(lead_id: int, req: LeadUpdateRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    lead = (
+        db.query(Lead)
+        .filter(Lead.id == lead_id, Lead.tenant_id == user.tenant_id)
+        .one_or_none()
+    )
     if lead is None:
         raise HTTPException(status_code=404, detail="Lead not found")
 
@@ -33,6 +39,7 @@ def update_lead(lead_id: int, req: LeadUpdateRequest, db: Session = Depends(get_
                 old_value=lead.status,
                 new_value=req.status,
                 actor="admin",
+                tenant_id=user.tenant_id,
             )
         )
         lead.status = req.status
@@ -46,6 +53,7 @@ def update_lead(lead_id: int, req: LeadUpdateRequest, db: Session = Depends(get_
                 old_value=str(lead.score),
                 new_value=str(req.score),
                 actor="admin",
+                tenant_id=user.tenant_id,
             )
         )
         lead.score = req.score
@@ -57,8 +65,12 @@ def update_lead(lead_id: int, req: LeadUpdateRequest, db: Session = Depends(get_
 
 
 @router.post("/{lead_id}/notes")
-def add_lead_note(lead_id: int, req: LeadNoteRequest, db: Session = Depends(get_db)):
-    lead = db.query(Lead).filter(Lead.id == lead_id).one_or_none()
+def add_lead_note(lead_id: int, req: LeadNoteRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    lead = (
+        db.query(Lead)
+        .filter(Lead.id == lead_id, Lead.tenant_id == user.tenant_id)
+        .one_or_none()
+    )
     if lead is None:
         raise HTTPException(status_code=404, detail="Lead not found")
 
@@ -67,6 +79,7 @@ def add_lead_note(lead_id: int, req: LeadNoteRequest, db: Session = Depends(get_
         event_type="note_added",
         note=req.note,
         actor=req.actor,
+        tenant_id=user.tenant_id,
     )
     db.add(event)
     db.commit()
@@ -76,14 +89,18 @@ def add_lead_note(lead_id: int, req: LeadNoteRequest, db: Session = Depends(get_
 
 
 @router.get("/{lead_id}/timeline")
-def lead_timeline(lead_id: int, db: Session = Depends(get_db)):
-    lead = db.query(Lead).filter(Lead.id == lead_id).one_or_none()
+def lead_timeline(lead_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    lead = (
+        db.query(Lead)
+        .filter(Lead.id == lead_id, Lead.tenant_id == user.tenant_id)
+        .one_or_none()
+    )
     if lead is None:
         raise HTTPException(status_code=404, detail="Lead not found")
 
     events = (
         db.query(LeadEvent)
-        .filter(LeadEvent.lead_id == lead_id)
+        .filter(LeadEvent.lead_id == lead_id, LeadEvent.tenant_id == user.tenant_id)
         .order_by(LeadEvent.created_at.asc())
         .all()
     )

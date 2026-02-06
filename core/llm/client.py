@@ -71,8 +71,8 @@ def generate_llm_draft(lead_summary: str | None, context_docs: Iterable[str] | N
     )
 
 
-def generate_llm_reply(message: str) -> str | None:
-    system_prompt = (
+def generate_llm_reply(message: str, system_override: str | None = None) -> str | None:
+    system_prompt = system_override or (
         "You are a ClientOps chat assistant. Respond in 3-6 short sentences. Be clear and helpful. "
         "Ask exactly one clarifying question. If the user asks about services, list 3-5 service bullets "
         "and end with the clarifying question."

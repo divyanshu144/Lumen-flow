@@ -45,6 +45,7 @@ def create_lead_followup_draft(lead_id: int):
             contact_id=lead.contact_id,
             conversation_id=convo.id if convo else None,
             session_id=convo.session_id if convo else None,
+            tenant_id=lead.tenant_id,
             status="pending",
             content=content,
         )
@@ -55,6 +56,7 @@ def create_lead_followup_draft(lead_id: int):
             db.add(
                 Message(
                     conversation_id=convo.id,
+                    tenant_id=lead.tenant_id,
                     role="system",
                     content=f"Draft created (pending):\n\n{content}",
                 )
@@ -93,6 +95,7 @@ def create_ticket_reply_draft(ticket_id: int):
             contact_id=ticket.contact_id,
             conversation_id=convo.id if convo else None,
             session_id=convo.session_id if convo else None,
+            tenant_id=ticket.tenant_id,
             status="pending",
             content=content,
         )
@@ -103,6 +106,7 @@ def create_ticket_reply_draft(ticket_id: int):
             db.add(
                 Message(
                     conversation_id=convo.id,
+                    tenant_id=ticket.tenant_id,
                     role="system",
                     content=f"Draft created (pending):\n\n{content}",
                 )

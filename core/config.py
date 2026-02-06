@@ -13,4 +13,8 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     llm_model: str = "gpt-4o-mini"
 
+    jwt_secret: str = "change-me"
+    jwt_algorithm: str = "HS256"
+    jwt_exp_minutes: int = 60
+
 settings = Settings()

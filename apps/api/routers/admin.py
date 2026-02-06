@@ -6,6 +6,9 @@ from core.models.crm import Lead, Ticket, Conversation, Message
 
 from core.db import get_db
 from core.models.crm import Lead, Ticket, Contact, AutomationDraft, Conversation, Message, LeadScoreRule, LeadEvent
+from apps.api.utils.support import classify_ticket, suggested_macros
+from apps.api.routers.auth import get_current_user
+from core.models.crm import User
 from pydantic import BaseModel
 
 router = APIRouter()
@@ -36,19 +39,28 @@ def _apply_rule(lead: Lead, rule: LeadScoreRule) -> int:
 
 
 @router.get("/metrics")
-def get_metrics(db: Session = Depends(get_db)):
-    contacts = db.query(Contact).count()
-    leads = db.query(Lead).count()
-    tickets = db.query(Ticket).count()
-    conversations = db.query(Conversation).count()
-    messages = db.query(Message).count()
-    drafts_total = db.query(AutomationDraft).count()
-    drafts_pending = db.query(AutomationDraft).filter(AutomationDraft.status == "pending").count()
-    drafts_approved = db.query(AutomationDraft).filter(AutomationDraft.status == "approved").count()
+def get_metrics(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    tenant_id = user.tenant_id
+    contacts = db.query(Contact).filter(Contact.tenant_id == tenant_id).count()
+    leads = db.query(Lead).filter(Lead.tenant_id == tenant_id).count()
+    tickets = db.query(Ticket).filter(Ticket.tenant_id == tenant_id).count()
+    conversations = db.query(Conversation).filter(Conversation.tenant_id == tenant_id).count()
+    messages = db.query(Message).filter(Message.tenant_id == tenant_id).count()
+    drafts_total = db.query(AutomationDraft).filter(AutomationDraft.tenant_id == tenant_id).count()
+    drafts_pending = (
+        db.query(AutomationDraft)
+        .filter(AutomationDraft.tenant_id == tenant_id, AutomationDraft.status == "pending")
+        .count()
+    )
+    drafts_approved = (
+        db.query(AutomationDraft)
+        .filter(AutomationDraft.tenant_id == tenant_id, AutomationDraft.status == "approved")
+        .count()
+    )
 
     # Avg response time: first assistant reply after first user msg per conversation
     avg_response_sec = None
-    convo_ids = [c.id for c in db.query(Conversation.id).all()]
+    convo_ids = [c.id for c in db.query(Conversation.id).filter(Conversation.tenant_id == tenant_id).all()]
     deltas = []
     for cid in convo_ids:
         msgs = (
@@ -82,10 +94,10 @@ def get_metrics(db: Session = Depends(get_db)):
 
 
 @router.get("/intent")
-def get_intent_distribution(db: Session = Depends(get_db), limit: int = 200):
+def get_intent_distribution(db: Session = Depends(get_db), user: User = Depends(get_current_user), limit: int = 200):
     rows = (
         db.query(Message)
-        .filter(Message.role == "user")
+        .filter(Message.role == "user", Message.tenant_id == user.tenant_id)
         .order_by(Message.id.desc())
         .limit(limit)
         .all()
@@ -97,47 +109,114 @@ def get_intent_distribution(db: Session = Depends(get_db), limit: int = 200):
 
 
 @router.post("/seed-demo")
-def seed_demo(db: Session = Depends(get_db)):
-    # Minimal demo dataset
-    c1 = Contact(email="aanya@ridge.io", name="Aanya Rao", company="Ridge Logistics")
-    c2 = Contact(email="sam@coastlabs.com", name="Sam Patel", company="Coast Labs")
-    db.add_all([c1, c2])
-    db.flush()
-
-    conv1 = Conversation(session_id="demo-session", channel="web", contact_id=c1.id)
-    conv2 = Conversation(session_id="support-session", channel="web", contact_id=c2.id)
-    db.add_all([conv1, conv2])
-    db.flush()
-
-    m1 = Message(conversation_id=conv1.id, role="user", content="We need HubSpot + WhatsApp integration.")
-    m2 = Message(conversation_id=conv1.id, role="assistant", content="Got it. Which CRM team owns routing today?")
-    m3 = Message(conversation_id=conv2.id, role="user", content="Login error on mobile app, getting 500.")
-    m4 = Message(conversation_id=conv2.id, role="assistant", content="Thanks. Can you share device + exact error?")
-    db.add_all([m1, m2, m3, m4])
-
-    lead = Lead(contact_id=c1.id, status="new", score=62, summary=m1.content)
-    ticket = Ticket(contact_id=c2.id, status="open", priority="high", category="auth", summary=m3.content)
-    db.add_all([lead, ticket])
-    db.flush()
-
-    draft = AutomationDraft(
-        kind="lead_followup",
-        lead_id=lead.id,
-        contact_id=c1.id,
-        conversation_id=conv1.id,
-        session_id=conv1.session_id,
-        status="pending",
-        content="Hi Aanya, thanks for reaching out. Want to schedule a quick 15‑minute call to align on routing and data fields?",
+def seed_demo(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    # Minimal demo dataset (idempotent)
+    c1 = (
+        db.query(Contact)
+        .filter(Contact.email == "aanya@ridge.io", Contact.tenant_id == user.tenant_id)
+        .one_or_none()
     )
-    db.add(draft)
+    if c1 is None:
+        c1 = Contact(email="aanya@ridge.io", name="Aanya Rao", company="Ridge Logistics", tenant_id=user.tenant_id)
+        db.add(c1)
+        db.flush()
+
+    c2 = (
+        db.query(Contact)
+        .filter(Contact.email == "sam@coastlabs.com", Contact.tenant_id == user.tenant_id)
+        .one_or_none()
+    )
+    if c2 is None:
+        c2 = Contact(email="sam@coastlabs.com", name="Sam Patel", company="Coast Labs", tenant_id=user.tenant_id)
+        db.add(c2)
+        db.flush()
+
+    conv1 = (
+        db.query(Conversation)
+        .filter(Conversation.session_id == "demo-session", Conversation.tenant_id == user.tenant_id)
+        .one_or_none()
+    )
+    if conv1 is None:
+        conv1 = Conversation(session_id="demo-session", channel="web", contact_id=c1.id, tenant_id=user.tenant_id)
+        db.add(conv1)
+        db.flush()
+
+    conv2 = (
+        db.query(Conversation)
+        .filter(Conversation.session_id == "support-session", Conversation.tenant_id == user.tenant_id)
+        .one_or_none()
+    )
+    if conv2 is None:
+        conv2 = Conversation(session_id="support-session", channel="web", contact_id=c2.id, tenant_id=user.tenant_id)
+        db.add(conv2)
+        db.flush()
+
+    existing_msgs = (
+        db.query(Message)
+        .filter(Message.conversation_id.in_([conv1.id, conv2.id]), Message.tenant_id == user.tenant_id)
+        .count()
+    )
+    if existing_msgs == 0:
+        m1 = Message(conversation_id=conv1.id, tenant_id=user.tenant_id, role="user", content="We need HubSpot + WhatsApp integration.")
+        m2 = Message(conversation_id=conv1.id, tenant_id=user.tenant_id, role="assistant", content="Got it. Which CRM team owns routing today?")
+        m3 = Message(conversation_id=conv2.id, tenant_id=user.tenant_id, role="user", content="Login error on mobile app, getting 500.")
+        m4 = Message(conversation_id=conv2.id, tenant_id=user.tenant_id, role="assistant", content="Thanks. Can you share device + exact error?")
+        db.add_all([m1, m2, m3, m4])
+
+    lead = (
+        db.query(Lead)
+        .filter(Lead.contact_id == c1.id, Lead.tenant_id == user.tenant_id)
+        .one_or_none()
+    )
+    if lead is None:
+        lead = Lead(tenant_id=user.tenant_id, contact_id=c1.id, status="new", score=62, summary="We need HubSpot + WhatsApp integration.")
+        db.add(lead)
+        db.flush()
+
+    ticket = (
+        db.query(Ticket)
+        .filter(Ticket.contact_id == c2.id, Ticket.tenant_id == user.tenant_id)
+        .one_or_none()
+    )
+    if ticket is None:
+        ticket = Ticket(tenant_id=user.tenant_id, contact_id=c2.id, status="open", priority="high", category="auth", summary="Login error on mobile app, getting 500.")
+        db.add(ticket)
+        db.flush()
+
+    draft = (
+        db.query(AutomationDraft)
+        .filter(
+            AutomationDraft.lead_id == lead.id,
+            AutomationDraft.kind == "lead_followup",
+            AutomationDraft.tenant_id == user.tenant_id,
+        )
+        .one_or_none()
+    )
+    if draft is None:
+        draft = AutomationDraft(
+            kind="lead_followup",
+            lead_id=lead.id,
+            contact_id=c1.id,
+            conversation_id=conv1.id,
+            session_id=conv1.session_id,
+            tenant_id=user.tenant_id,
+            status="pending",
+            content="Hi Aanya, thanks for reaching out. Want to schedule a quick 15‑minute call to align on routing and data fields?",
+        )
+        db.add(draft)
     db.commit()
 
     return {"ok": True, "seeded": True}
 
 
 @router.get("/score/rules")
-def list_score_rules(db: Session = Depends(get_db)):
-    rows = db.query(LeadScoreRule).order_by(LeadScoreRule.id.desc()).all()
+def list_score_rules(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    rows = (
+        db.query(LeadScoreRule)
+        .filter(LeadScoreRule.tenant_id == user.tenant_id)
+        .order_by(LeadScoreRule.id.desc())
+        .all()
+    )
     return [
         {
             "id": r.id,
@@ -154,7 +233,7 @@ def list_score_rules(db: Session = Depends(get_db)):
 
 
 @router.post("/score/rules")
-def create_score_rule(payload: dict, db: Session = Depends(get_db)):
+def create_score_rule(payload: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     required = ["name", "field", "operator", "value", "points"]
     if any(k not in payload for k in required):
         raise HTTPException(status_code=400, detail="Missing required fields")
@@ -166,6 +245,7 @@ def create_score_rule(payload: dict, db: Session = Depends(get_db)):
         value=str(payload["value"]),
         points=int(payload["points"]),
         active=bool(payload.get("active", True)),
+        tenant_id=user.tenant_id,
     )
     db.add(rule)
     db.commit()
@@ -174,8 +254,12 @@ def create_score_rule(payload: dict, db: Session = Depends(get_db)):
 
 
 @router.patch("/score/rules/{rule_id}")
-def update_score_rule(rule_id: int, payload: dict, db: Session = Depends(get_db)):
-    rule = db.query(LeadScoreRule).filter(LeadScoreRule.id == rule_id).one_or_none()
+def update_score_rule(rule_id: int, payload: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    rule = (
+        db.query(LeadScoreRule)
+        .filter(LeadScoreRule.id == rule_id, LeadScoreRule.tenant_id == user.tenant_id)
+        .one_or_none()
+    )
     if not rule:
         raise HTTPException(status_code=404, detail="Rule not found")
 
@@ -188,8 +272,12 @@ def update_score_rule(rule_id: int, payload: dict, db: Session = Depends(get_db)
 
 
 @router.delete("/score/rules/{rule_id}")
-def delete_score_rule(rule_id: int, db: Session = Depends(get_db)):
-    rule = db.query(LeadScoreRule).filter(LeadScoreRule.id == rule_id).one_or_none()
+def delete_score_rule(rule_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    rule = (
+        db.query(LeadScoreRule)
+        .filter(LeadScoreRule.id == rule_id, LeadScoreRule.tenant_id == user.tenant_id)
+        .one_or_none()
+    )
     if not rule:
         raise HTTPException(status_code=404, detail="Rule not found")
 
@@ -199,9 +287,13 @@ def delete_score_rule(rule_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/score/recompute")
-def recompute_scores(db: Session = Depends(get_db)):
-    rules = db.query(LeadScoreRule).filter(LeadScoreRule.active == True).all()
-    leads = db.query(Lead).all()
+def recompute_scores(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    rules = (
+        db.query(LeadScoreRule)
+        .filter(LeadScoreRule.active == True, LeadScoreRule.tenant_id == user.tenant_id)
+        .all()
+    )
+    leads = db.query(Lead).filter(Lead.tenant_id == user.tenant_id).all()
     updated = 0
     for lead in leads:
         old = lead.score or 0
@@ -223,9 +315,10 @@ def recompute_scores(db: Session = Depends(get_db)):
 
 
 @router.get("/sla")
-def get_sla(db: Session = Depends(get_db), threshold_sec: int = 300, limit: int = 50):
+def get_sla(db: Session = Depends(get_db), user: User = Depends(get_current_user), threshold_sec: int = 300, limit: int = 50):
     conversations = (
         db.query(Conversation)
+        .filter(Conversation.tenant_id == user.tenant_id)
         .order_by(Conversation.id.desc())
         .limit(limit)
         .all()
@@ -234,7 +327,7 @@ def get_sla(db: Session = Depends(get_db), threshold_sec: int = 300, limit: int 
     for convo in conversations:
         msgs = (
             db.query(Message)
-            .filter(Message.conversation_id == convo.id)
+            .filter(Message.conversation_id == convo.id, Message.tenant_id == user.tenant_id)
             .order_by(Message.id.asc())
             .all()
         )
@@ -258,8 +351,14 @@ def get_sla(db: Session = Depends(get_db), threshold_sec: int = 300, limit: int 
     return rows
 
 @router.get("/leads")
-def list_leads(db: Session = Depends(get_db)):
-    rows = db.query(Lead).order_by(Lead.id.desc()).limit(100).all()
+def list_leads(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    rows = (
+        db.query(Lead)
+        .filter(Lead.tenant_id == user.tenant_id)
+        .order_by(Lead.id.desc())
+        .limit(100)
+        .all()
+    )
     return [
         {
             "id": r.id,
@@ -272,8 +371,14 @@ def list_leads(db: Session = Depends(get_db)):
     ]
 
 @router.get("/tickets")
-def list_tickets(db: Session = Depends(get_db)):
-    rows = db.query(Ticket).order_by(Ticket.id.desc()).limit(100).all()
+def list_tickets(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    rows = (
+        db.query(Ticket)
+        .filter(Ticket.tenant_id == user.tenant_id)
+        .order_by(Ticket.id.desc())
+        .limit(100)
+        .all()
+    )
     return [
         {
             "id": r.id,
@@ -281,14 +386,23 @@ def list_tickets(db: Session = Depends(get_db)):
             "status": r.status,
             "priority": r.priority,
             "category": r.category,
+            "tag": r.tag,
+            "sentiment": r.sentiment,
+            "urgency": r.urgency,
             "summary": r.summary,
         }
         for r in rows
     ]
 
 @router.get("/contacts")
-def list_contacts(db: Session = Depends(get_db)):
-    rows = db.query(Contact).order_by(Contact.id.desc()).limit(100).all()
+def list_contacts(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    rows = (
+        db.query(Contact)
+        .filter(Contact.tenant_id == user.tenant_id)
+        .order_by(Contact.id.desc())
+        .limit(100)
+        .all()
+    )
     return [{"id": c.id, "email": c.email, "name": c.name, "company": c.company} for c in rows]
 
 
@@ -306,10 +420,10 @@ class DraftOut(BaseModel):
     content: str
 
 @router.get("/leads/{lead_id}/drafts")
-def list_lead_drafts(lead_id: int, db: Session = Depends(get_db)):
+def list_lead_drafts(lead_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     drafts = (
         db.query(AutomationDraft)
-        .filter(AutomationDraft.lead_id == lead_id)
+        .filter(AutomationDraft.lead_id == lead_id, AutomationDraft.tenant_id == user.tenant_id)
         .order_by(AutomationDraft.created_at.desc())
         .all()
     )
@@ -327,8 +441,8 @@ def list_lead_drafts(lead_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/drafts")
-def list_drafts(status: str = "pending", db: Session = Depends(get_db)):
-    q = db.query(AutomationDraft).order_by(AutomationDraft.id.desc())
+def list_drafts(status: str = "pending", db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    q = db.query(AutomationDraft).filter(AutomationDraft.tenant_id == user.tenant_id).order_by(AutomationDraft.id.desc())
     if status:
         q = q.filter(AutomationDraft.status == status)
     drafts = q.limit(200).all()
@@ -352,8 +466,12 @@ def list_drafts(status: str = "pending", db: Session = Depends(get_db)):
 
 
 @router.post("/drafts/{draft_id}/approve")
-def approve_draft(draft_id: int, db: Session = Depends(get_db)):
-    draft = db.query(AutomationDraft).filter(AutomationDraft.id == draft_id).one_or_none()
+def approve_draft(draft_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    draft = (
+        db.query(AutomationDraft)
+        .filter(AutomationDraft.id == draft_id, AutomationDraft.tenant_id == user.tenant_id)
+        .one_or_none()
+    )
     if not draft:
         raise HTTPException(status_code=404, detail="Draft not found")
 
@@ -370,6 +488,7 @@ def approve_draft(draft_id: int, db: Session = Depends(get_db)):
         db.add(
             Message(
                 conversation_id=convo.id,
+                tenant_id=draft.tenant_id,
                 role="system",
                 content=f"APPROVED + SENT:\n\n{draft.content}",
             )
@@ -394,8 +513,12 @@ def approve_draft(draft_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/drafts/{draft_id}/reject")
-def reject_draft(draft_id: int, db: Session = Depends(get_db)):
-    draft = db.query(AutomationDraft).filter(AutomationDraft.id == draft_id).one_or_none()
+def reject_draft(draft_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    draft = (
+        db.query(AutomationDraft)
+        .filter(AutomationDraft.id == draft_id, AutomationDraft.tenant_id == user.tenant_id)
+        .one_or_none()
+    )
     if not draft:
         raise HTTPException(status_code=404, detail="Draft not found")
 
@@ -408,8 +531,12 @@ def reject_draft(draft_id: int, db: Session = Depends(get_db)):
 
 
 @router.patch("/drafts/{draft_id}")
-def update_draft(draft_id: int, payload: dict, db: Session = Depends(get_db)):
-    draft = db.query(AutomationDraft).filter(AutomationDraft.id == draft_id).one_or_none()
+def update_draft(draft_id: int, payload: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    draft = (
+        db.query(AutomationDraft)
+        .filter(AutomationDraft.id == draft_id, AutomationDraft.tenant_id == user.tenant_id)
+        .one_or_none()
+    )
     if not draft:
         raise HTTPException(status_code=404, detail="Draft not found")
 
@@ -424,3 +551,35 @@ def update_draft(draft_id: int, payload: dict, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(draft)
     return {"ok": True, "draft_id": draft.id, "status": draft.status, "content": draft.content}
+
+
+@router.post("/tickets/{ticket_id}/classify")
+def classify_ticket_endpoint(ticket_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    ticket = (
+        db.query(Ticket)
+        .filter(Ticket.id == ticket_id, Ticket.tenant_id == user.tenant_id)
+        .one_or_none()
+    )
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+
+    classification = classify_ticket(ticket.summary or "")
+    ticket.tag = classification["tag"]
+    ticket.sentiment = classification["sentiment"]
+    ticket.urgency = classification["urgency"]
+    db.commit()
+    return {"ok": True, **classification}
+
+
+@router.get("/tickets/{ticket_id}/macros")
+def ticket_macros(ticket_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    ticket = (
+        db.query(Ticket)
+        .filter(Ticket.id == ticket_id, Ticket.tenant_id == user.tenant_id)
+        .one_or_none()
+    )
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+
+    tag = ticket.tag or classify_ticket(ticket.summary or "")["tag"]
+    return {"ticket_id": ticket.id, "tag": tag, "macros": suggested_macros(tag)}
